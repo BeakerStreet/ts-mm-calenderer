@@ -46,4 +46,7 @@ Thumbs.db
 *.pickle
 daily_summaries/
 descriptions/
-backups/ 
+backups/
+
+# Credentials
+credentials.json 
