@@ -56,6 +56,10 @@ def generate_daily_summaries(schedule_df, target_date=None):
             lambda x: x.sort_values('start_time')['start_time'].apply(format_time).tolist()
         ).iloc[0]  # All mentors have the same time slots
         
+        # Add lunch break column after the 5th meeting (11:20)
+        time_slots.insert(5, '11:50')  # Add lunch break time
+        pivot_df.insert(5, '11:50', 'LUNCH')  # Add lunch break column
+        
         # Rename columns to use start times
         pivot_df.columns = time_slots
         

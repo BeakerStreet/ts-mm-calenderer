@@ -39,31 +39,32 @@ def get_airtable_records():
 
 def generate_time_slots(date_str):
     """
-    Generate exact time slots as specified:
-    09:30 - 09:50 Meeting 1
-    09:55 - 10:15 Meeting 2
-    10:20 - 10:40 Meeting 3
-    10:55 - 11:15 Meeting 4
-    11:20 - 11:40 Meeting 5
-    11:50 - 12:50 Lunch
-    12:50 - 13:10 Meeting 6
-    13:15 - 13:35 Meeting 7
-    13:40 - 14:00 Meeting 8
+    Generate time slots for 8 simultaneous meetings with breaks:
+    Event          Start    End
+    Meeting 1      9:30     9:55
+    Meeting 2      10:00    10:25
+    Meeting 3      10:30    10:55
+    Meeting 4      11:00    11:25
+    Meeting 5      11:30    11:55
+    Lunch (30 min) 11:55    12:25
+    Meeting 6      12:25    12:55
+    Meeting 7      13:00    13:25
+    Meeting 8      13:30    13:55
     """
     slots = []
     date = datetime.strptime(date_str, '%Y-%m-%d')
     
     # Define the exact time slots as specified
     time_ranges = [
-        ('09:30', '09:50'),
-        ('09:55', '10:15'),
-        ('10:20', '10:40'),
-        ('10:55', '11:15'),
-        ('11:20', '11:40'),
-        # Lunch break 11:50 - 12:50
-        ('12:50', '13:10'),
-        ('13:15', '13:35'),
-        ('13:40', '14:00')
+        ('09:30', '09:55'),
+        ('10:00', '10:25'),
+        ('10:30', '10:55'),
+        ('11:00', '11:25'),
+        ('11:30', '11:55'),
+        # Lunch break 11:55 - 12:25
+        ('12:25', '12:55'),
+        ('13:00', '13:25'),
+        ('13:30', '13:55')
     ]
     
     # Create slots based on the specified time ranges
@@ -76,7 +77,7 @@ def generate_time_slots(date_str):
             'end': end_time.isoformat()
         })
     
-    logger.info(f"Generated {len(slots)} meeting slots for {date_str}, with a lunch break from 11:50 to 12:50")
+    logger.info(f"Generated {len(slots)} meeting slots for {date_str}, with a lunch break from 11:55 to 12:25")
     
     return slots
 
@@ -105,7 +106,7 @@ def create_schedule(records, companies, companies_with_emails):
             
             # Store full mentor details for description
             mentor_name = fields['Name']
-            mentor_role = fields.get('Role', 'Mentor')  # Default to 'Mentor' if role not specified
+            mentor_role = fields.get('Role', 'Mentor')
             mentor_company = fields.get('Company', '')
             mentor_bio = fields.get('Bio', '')
             
@@ -126,87 +127,35 @@ def create_schedule(records, companies, companies_with_emails):
         
         logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies")
         
-        # Create a copy of companies list for this date to avoid modifying the original
-        date_companies = companies.copy()
-        
-        # Track which mentor-company pairs have already met ON THIS DATE
-        daily_meetings_held = set()
-        
-        # Track which companies each mentor has met today
-        mentor_to_companies = {mentor: set() for mentor in mentors}
-        
         # For each time slot
         for slot_index, slot in enumerate(time_slots):
             logger.info(f"Scheduling slot {slot_index+1}: {slot['start']} - {slot['end']}")
             
-            # Create copy of mentors for this slot
-            all_mentors_in_slot = mentors.copy()
+            # Determine which mentor gets the break in this slot (rotate through all mentors)
+            break_mentor_index = slot_index % num_mentors
+            break_mentor = mentors[break_mentor_index]
             
-            # If we have more mentors than companies, determine which mentor skips this slot
-            if num_mentors > num_companies:
-                # Determine which mentor to skip in this slot (rotate through all mentors)
-                mentor_to_skip_index = slot_index % num_mentors
-                mentor_to_skip = mentors[mentor_to_skip_index]
-                logger.info(f"In slot {slot['start']}, {mentor_to_skip} will have an empty slot")
+            # Create a BREAK event for the selected mentor
+            meeting = {
+                'summary': f"{break_mentor} <> BREAK",
+                'start_time': slot['start'],
+                'end_time': slot['end'],
+                'company': "BREAK",
+                'mentor': break_mentor,
+                'description': f"Break time for {break_mentor}",
+                'attendees': '',
+                'location': '',
+                'date': date
+            }
+            schedule.append(meeting)
+            
+            # Create meetings for all other mentors with companies
+            available_mentors = [m for m in mentors if m != break_mentor]
+            for mentor_index, mentor in enumerate(available_mentors):
+                # Rotate through companies based on the slot index
+                company_index = (slot_index + mentor_index) % num_companies
+                company = companies[company_index]
                 
-                # Create a BREAK event for this mentor
-                meeting = {
-                    'summary': f"{mentor_to_skip} <> BREAK",
-                    'start_time': slot['start'],
-                    'end_time': slot['end'],
-                    'company': "BREAK",
-                    'mentor': mentor_to_skip,
-                    'description': f"Break time for {mentor_to_skip}",
-                    'attendees': '',
-                    'location': '',
-                    'date': date
-                }
-                schedule.append(meeting)
-                
-                # Remove the mentor to skip from available mentors for this slot
-                available_mentors = [m for m in all_mentors_in_slot if m != mentor_to_skip]
-            else:
-                # All mentors are available if we have enough or fewer mentors than companies
-                available_mentors = all_mentors_in_slot.copy()
-            
-            # Available companies for this slot (make a copy to avoid modifying original)
-            available_companies = date_companies.copy()
-            
-            # Temporary meetings for this slot
-            temp_meetings = []
-            
-            # Match mentors with companies they haven't met yet
-            for mentor in available_mentors[:]:  # Use a copy to allow removal during iteration
-                # Check if there are any companies left that this mentor hasn't met
-                unmet_companies = [c for c in available_companies if c not in mentor_to_companies[mentor]]
-                
-                if unmet_companies:
-                    # Assign the first unmet company to this mentor
-                    company = unmet_companies[0]
-                    temp_meetings.append((mentor, company))
-                    mentor_to_companies[mentor].add(company)
-                    daily_meetings_held.add((mentor, company))
-                    available_companies.remove(company)
-                    available_mentors.remove(mentor)  # Remove this mentor from consideration for this slot
-                else:
-                    # No unmet companies available, give this mentor a break
-                    meeting = {
-                        'summary': f"{mentor} <> BREAK",
-                        'start_time': slot['start'],
-                        'end_time': slot['end'],
-                        'company': "BREAK",
-                        'mentor': mentor,
-                        'description': f"Break time for {mentor} (all companies already met)",
-                        'attendees': '',
-                        'location': '',
-                        'date': date
-                    }
-                    schedule.append(meeting)
-                    available_mentors.remove(mentor)  # Remove this mentor from consideration for this slot
-                    logger.info(f"{mentor} gets a BREAK in slot {slot_index+1} - already met all available companies")
-            
-            # Create the actual meeting entries for valid pairings
-            for mentor, company in temp_meetings:
                 # Create formatted description with mentor details
                 details = mentor_details[mentor]
                 description = f"{mentor}, {details['role']}, {details['company']}: {details['bio']}"
@@ -232,9 +181,6 @@ def create_schedule(records, companies, companies_with_emails):
                 }
                 
                 schedule.append(meeting)
-            
-            # Rotate companies for next slot
-            date_companies = date_companies[1:] + [date_companies[0]]
     
     # Add debug information about total meetings created
     logger.info(f"Created a total of {len(schedule)} meetings")
@@ -242,24 +188,6 @@ def create_schedule(records, companies, companies_with_emails):
     # Count break events
     break_count = sum(1 for meeting in schedule if meeting['company'] == "BREAK")
     logger.info(f"Schedule includes {break_count} break events for mentors")
-    
-    # Check for duplicate meetings as a safety measure
-    duplicate_check = {}
-    for meeting in schedule:
-        if meeting['company'] == "BREAK":
-            continue  # Skip break events in duplicate checking
-            
-        date = meeting['date']
-        mentor = meeting['mentor']
-        company = meeting['company']
-        key = (date, mentor, company)
-        
-        if key in duplicate_check:
-            logger.warning(f"Duplicate detected: {mentor} <> {company} on {date}")
-            # Print the time slots of the duplicates for debugging
-            logger.warning(f"  Time 1: {duplicate_check[key]}, Time 2: {meeting['start_time']}")
-        else:
-            duplicate_check[key] = meeting['start_time']
     
     return schedule
 
