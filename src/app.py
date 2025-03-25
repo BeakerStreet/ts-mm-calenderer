@@ -15,22 +15,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
+# Define paths
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(SRC_DIR, '..'))
+
+# Load environment variables - try different possible locations
+env_paths = [
+    os.path.join(SRC_DIR, '.env'),  # src/.env
+    os.path.join(PROJECT_ROOT, '.env'),  # .env in root directory
+    '.env'  # current directory
+]
+
+for env_path in env_paths:
+    if os.path.exists(env_path):
+        logger.info(f"Loading environment variables from: {env_path}")
+        load_dotenv(env_path)
+        break
+else:
+    logger.warning("No .env file found in expected locations. Looking for environment variables directly.")
 
 # Path configurations
 CONFIG_PATHS = {
-    'companies': 'config/companies.csv',
-    'meeting_config': 'config/meeting_config.csv',
-    'mentors': 'config/mentors.csv'
+    'companies': os.path.join(PROJECT_ROOT, 'config', 'companies.csv'),
+    'meeting_config': os.path.join(PROJECT_ROOT, 'config', 'meeting_config.csv'),
+    'mentors': os.path.join(PROJECT_ROOT, 'config', 'mentors.csv')
 }
 
 # Output paths
 OUTPUT_PATHS = {
-    'descriptions': 'output/descriptions',
-    'summaries': 'output/summaries',
-    'backups': 'output/backups',
-    'schedule': 'output/meeting_schedule.csv'
+    'descriptions': os.path.join(PROJECT_ROOT, 'output', 'descriptions'),
+    'summaries': os.path.join(PROJECT_ROOT, 'output', 'summaries'),
+    'backups': os.path.join(PROJECT_ROOT, 'output', 'backups'),
+    'schedule': os.path.join(PROJECT_ROOT, 'output', 'meeting_schedule.csv')
 }
 
 def load_companies():
@@ -92,12 +108,21 @@ def load_mentors(target_date=None):
     logger.info(f"Loaded {len(mentors)} mentors for date {target_date}")
     return mentors, mentor_details
 
-def refresh_mentors():
-    """Call refresh_mentors.py to update mentors.csv from Airtable"""
-    logger.info("Refreshing mentors data from Airtable...")
+def refresh_mentors(target_date=None):
+    """Call refresh_mentors.py to update mentors.csv from Airtable
+    
+    Args:
+        target_date (str, optional): If specified, only include mentors for this date
+    """
+    logger.info(f"Refreshing mentors data from Airtable{' for date: ' + target_date if target_date else ''}...")
     try:
-        refresh_script = os.path.join('config', 'refresh_mentors.py')
-        result = subprocess.run(['python', refresh_script], 
+        refresh_script = os.path.join(PROJECT_ROOT, 'config', 'refresh_mentors.py')
+        cmd = ['python', refresh_script]
+        
+        if target_date:
+            cmd.extend(['--date', target_date])
+            
+        result = subprocess.run(cmd, 
                                capture_output=True, 
                                text=True, 
                                check=True)
@@ -116,29 +141,97 @@ def get_target_date_and_options():
     parser.add_argument('--refresh', action='store_true', help='Refresh mentors data from Airtable')
     args = parser.parse_args()
     
-    # Handle refresh option
-    if args.refresh:
-        success = refresh_mentors()
-        if not success:
-            logger.warning("Continuing with existing mentor data...")
-    
-    # Handle date
+    # If date is specified via command line, validate and use it
     if args.date:
-        return args.date
-    
-    while True:
-        date_str = input("Enter target date (YYYY-MM-DD): ").strip()
         try:
             # Validate date format
-            datetime.strptime(date_str, '%Y-%m-%d')
+            datetime.strptime(args.date, '%Y-%m-%d')
+            selected_date = args.date
             
-            # Ask about refreshing mentors if not specified in command line
-            if not args.refresh and input("Refresh mentors data from Airtable? (y/n): ").lower().startswith('y'):
-                refresh_mentors()
+            # If refresh is also specified via command line, do it
+            if args.refresh:
+                refresh_mentors(selected_date)
                 
-            return date_str
+            return selected_date
         except ValueError:
-            print("Invalid date format. Please use YYYY-MM-DD format.")
+            logger.error(f"Invalid date format: {args.date}. Please use YYYY-MM-DD format.")
+            # Continue to interactive date selection
+    
+    # Check if we need to refresh first to get available dates
+    if args.refresh:
+        refresh_mentors()  # Full refresh to get all available dates
+    
+    # Get available dates from mentors.csv
+    try:
+        mentors_df = pd.read_csv(CONFIG_PATHS['mentors'])
+        available_dates = set()
+        
+        for dates_str in mentors_df['dates'].dropna():
+            dates = dates_str.split(',')
+            available_dates.update(dates)
+        
+        # Sort dates for display
+        available_dates = sorted(list(available_dates))
+        
+        if not available_dates:
+            logger.warning("No available dates found in mentors data. Refreshing data from Airtable...")
+            refresh_mentors()  # Full refresh to get all available dates
+            
+            # Try again after refresh
+            mentors_df = pd.read_csv(CONFIG_PATHS['mentors'])
+            available_dates = set()
+            
+            for dates_str in mentors_df['dates'].dropna():
+                dates = dates_str.split(',')
+                available_dates.update(dates)
+                
+            available_dates = sorted(list(available_dates))
+            
+            if not available_dates:
+                logger.warning("Still no available dates after refresh. Please enter date manually.")
+                return input("Enter target date (YYYY-MM-DD): ").strip()
+        
+        # Display available dates to user
+        print("\nAvailable dates from Airtable:")
+        for i, date in enumerate(available_dates):
+            print(f"{i+1}. {date}")
+        
+        # Let user select a date
+        selected_date = None
+        while not selected_date:
+            try:
+                selection = input("\nSelect a date by entering its number: ")
+                index = int(selection) - 1
+                
+                if 0 <= index < len(available_dates):
+                    selected_date = available_dates[index]
+                    logger.info(f"Selected date: {selected_date}")
+                else:
+                    print(f"Please enter a number between 1 and {len(available_dates)}")
+            except ValueError:
+                print("Please enter a valid number")
+        
+        # Ask if user wants to refresh the data for this specific date
+        if not args.refresh and input(f"\nRefresh mentors data from Airtable for {selected_date}? (y/n): ").lower().startswith('y'):
+            refresh_mentors(selected_date)
+        
+        return selected_date
+    
+    except Exception as e:
+        logger.error(f"Error reading available dates: {str(e)}")
+        
+        # If we can't read dates for some reason, ask if user wants to refresh
+        if input("Would you like to refresh mentors data from Airtable? (y/n): ").lower().startswith('y'):
+            refresh_mentors()  # Full refresh since we don't have a date yet
+            
+        # Fall back to manual entry
+        date_input = input("Enter target date (YYYY-MM-DD): ").strip()
+        
+        # Ask if user wants to refresh for this specific date
+        if input(f"\nRefresh mentors data from Airtable for {date_input}? (y/n): ").lower().startswith('y'):
+            refresh_mentors(date_input)
+            
+        return date_input
 
 def convert_name_to_url_format(name):
     """Convert a mentor name to URL format with lowercase and dashes instead of spaces"""
