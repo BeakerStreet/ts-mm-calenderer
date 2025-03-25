@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import sys
 import argparse
+import subprocess
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +21,8 @@ load_dotenv()
 # Path configurations
 CONFIG_PATHS = {
     'companies': 'config/companies.csv',
-    'meeting_config': 'config/meeting_config.csv'
+    'meeting_config': 'config/meeting_config.csv',
+    'mentors': 'config/mentors.csv'
 }
 
 # Output paths
@@ -62,28 +64,65 @@ def load_meeting_config():
     logger.info(f"Loaded {len(time_slots)} meeting slots from config")
     return time_slots
 
-# Airtable setup
-AIRTABLE_TOKEN = os.getenv('AIRTABLE_TOKEN')
-AIRTABLE_BASE_ID = os.getenv('AIRTABLE_BASE_ID')
-AIRTABLE_TABLE_ID = 'tbllbtrlfcmReNxQR'
+def load_mentors(target_date=None):
+    """Load mentors data from CSV file, optionally filtering by date"""
+    mentors_file = CONFIG_PATHS['mentors']
+    df = pd.read_csv(mentors_file)
+    
+    # Filter mentors by date if specified
+    if target_date:
+        # First fill NaN values with empty string to avoid filtering errors
+        df['dates'] = df['dates'].fillna('')
+        df = df[df['dates'].str.contains(target_date)]
+    
+    # Convert DataFrame to a list of dictionaries
+    mentors = []
+    mentor_details = {}
+    
+    for _, row in df.iterrows():
+        mentor_name = row['name']
+        mentors.append(mentor_name)
+        
+        mentor_details[mentor_name] = {
+            'role': row['role'],
+            'company': row['company'],
+            'bio': row['bio']
+        }
+    
+    logger.info(f"Loaded {len(mentors)} mentors for date {target_date}")
+    return mentors, mentor_details
 
-logger.info(f"Using Base ID: {AIRTABLE_BASE_ID}")
-logger.info(f"Using Table ID: {AIRTABLE_TABLE_ID}")
-logger.info(f"Using Token: {AIRTABLE_TOKEN[:10]}...")  # Only show first 10 chars for security
+def refresh_mentors():
+    """Call refresh_mentors.py to update mentors.csv from Airtable"""
+    logger.info("Refreshing mentors data from Airtable...")
+    try:
+        refresh_script = os.path.join('config', 'refresh_mentors.py')
+        result = subprocess.run(['python', refresh_script], 
+                               capture_output=True, 
+                               text=True, 
+                               check=True)
+        logger.info("Mentors data refreshed successfully")
+        logger.info(result.stdout)
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error refreshing mentors data: {e}")
+        logger.error(f"Error output: {e.stderr}")
+        return False
 
-# Airtable API configuration
-AIRTABLE_API_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}"
-AIRTABLE_HEADERS = {
-    'Authorization': f'Bearer {AIRTABLE_TOKEN}',
-    'Content-Type': 'application/json'
-}
-
-def get_target_date():
-    """Get the target date from command line arguments or user input"""
+def get_target_date_and_options():
+    """Get the target date and options from command line arguments or user input"""
     parser = argparse.ArgumentParser(description='Generate mentor meeting schedule')
     parser.add_argument('--date', type=str, help='Target date in YYYY-MM-DD format')
+    parser.add_argument('--refresh', action='store_true', help='Refresh mentors data from Airtable')
     args = parser.parse_args()
     
+    # Handle refresh option
+    if args.refresh:
+        success = refresh_mentors()
+        if not success:
+            logger.warning("Continuing with existing mentor data...")
+    
+    # Handle date
     if args.date:
         return args.date
     
@@ -92,15 +131,14 @@ def get_target_date():
         try:
             # Validate date format
             datetime.strptime(date_str, '%Y-%m-%d')
+            
+            # Ask about refreshing mentors if not specified in command line
+            if not args.refresh and input("Refresh mentors data from Airtable? (y/n): ").lower().startswith('y'):
+                refresh_mentors()
+                
             return date_str
         except ValueError:
             print("Invalid date format. Please use YYYY-MM-DD format.")
-
-def get_airtable_records():
-    """Fetch all records from Airtable"""
-    response = requests.get(AIRTABLE_API_URL, headers=AIRTABLE_HEADERS)
-    response.raise_for_status()
-    return response.json()['records']
 
 def convert_name_to_url_format(name):
     """Convert a mentor name to URL format with lowercase and dashes instead of spaces"""
@@ -110,120 +148,83 @@ def convert_name_to_url_format(name):
     url_name = '-'.join([part for part in url_name.split() if part])
     return url_name
 
-def create_schedule(records, companies, target_date, time_slots):
+def create_schedule(mentors, mentor_details, companies, target_date, time_slots):
     """Create a schedule of meetings between companies and mentors"""
     schedule = []
     
-    # Group records by date and store full record info
-    date_groups = {}
-    mentor_details = {}  # Store mentor details for descriptions
+    # Convert companies dict to list for ordered iteration
+    company_list = list(companies.keys())
+    num_companies = len(company_list)
+    num_mentors = len(mentors)
     
-    # Log all dates found in records
-    logger.info("\n=== Available Dates in Records ===")
-    all_dates = set()
-    for record in records:
-        fields = record['fields']
-        if 'Date' in fields:
-            all_dates.add(fields['Date'])
-    logger.info(f"Found dates: {sorted(list(all_dates))}")
-    logger.info(f"Looking for date: {target_date}")
+    # Balance the lists by adding BREAK placeholders to the shorter list
+    if num_mentors < num_companies:
+        logger.info(f"Adding {num_companies - num_mentors} BREAK placeholders to mentors list")
+        mentors.extend(["BREAK"] * (num_companies - num_mentors))
+    elif num_companies < num_mentors:
+        logger.info(f"Adding {num_mentors - num_companies} BREAK placeholders to companies list")
+        company_list.extend(["BREAK"] * (num_mentors - num_companies))
     
-    for record in records:
-        fields = record['fields']
-        if 'Date' in fields and 'Name' in fields:
-            date = fields['Date']
-            # Only process records for the target date
-            if date != target_date:
+    # Update counts after balancing
+    num_companies = len(company_list)
+    num_mentors = len(mentors)
+    logger.info(f"Balanced counts: {num_mentors} total slots (mentors + breaks), {num_companies} total slots (companies + breaks)")
+    
+    # Convert time slots to include date
+    date_time_slots = []
+    for slot in time_slots:
+        start_datetime = datetime.strptime(f"{target_date} {slot['start']}", '%Y-%m-%d %H:%M')
+        end_datetime = datetime.strptime(f"{target_date} {slot['end']}", '%Y-%m-%d %H:%M')
+        date_time_slots.append({
+            'start': start_datetime.isoformat(),
+            'end': end_datetime.isoformat()
+        })
+    
+    logger.info(f"Scheduling for date {target_date}: {len(mentors)} mentors, {num_companies} companies, {len(date_time_slots)} time slots")
+    
+    # For each time slot
+    for slot_index, slot in enumerate(date_time_slots):
+        logger.info(f"Scheduling slot {slot_index+1}: {slot['start']} - {slot['end']}")
+        
+        # For each mentor in this slot
+        for mentor_index, mentor in enumerate(mentors):
+            # Skip if this is a BREAK
+            if mentor == "BREAK":
                 continue
                 
-            if date not in date_groups:
-                date_groups[date] = []
+            # Get company in round-robin fashion
+            company_index = (slot_index + mentor_index) % num_companies
+            company = company_list[company_index]
             
-            # Store full mentor details for description
-            mentor_name = fields['Name']
-            mentor_role = fields.get('Role', 'Mentor')
-            mentor_company = fields.get('Company', '')
-            mentor_bio = fields.get('Bio', '')
+            # Skip if this is a BREAK
+            if company == "BREAK":
+                continue
             
-            mentor_details[mentor_name] = {
-                'role': mentor_role,
-                'company': mentor_company,
-                'bio': mentor_bio
+            # Create formatted description with mentor details
+            details = mentor_details[mentor]
+            description = f"{mentor}, {details['role']}, {details['company']}: {details['bio']}"
+            
+            # Get the attendees (founder emails) for this company
+            attendees = companies[company]["emails"]
+            
+            # Generate mentor URL for location field
+            mentor_url_name = convert_name_to_url_format(mentor)
+            location_url = f"https://techstars-ldn-mentor-lookbook.lovable.app/mentor/{mentor_url_name}"
+            
+            # Create the meeting entry
+            meeting = {
+                'summary': f"{mentor} <> {company}",
+                'start_time': slot['start'],
+                'end_time': slot['end'],
+                'company': company,
+                'mentor': mentor,
+                'description': description,
+                'attendees': attendees,
+                'location': location_url,
+                'date': target_date
             }
             
-            # Add mentor to this date group
-            date_groups[date].append(mentor_name)
-
-    # For each date, create the schedule
-    for date, mentors in date_groups.items():
-        # Convert companies dict to list for ordered iteration
-        company_list = list(companies.keys())
-        num_companies = len(company_list)
-        num_mentors = len(mentors)
-        
-        # Balance the lists by adding BREAK placeholders to the shorter list
-        if num_mentors < num_companies:
-            logger.info(f"Adding {num_companies - num_mentors} BREAK placeholders to mentors list")
-            mentors.extend(["BREAK"] * (num_companies - num_mentors))
-        elif num_companies < num_mentors:
-            logger.info(f"Adding {num_mentors - num_companies} BREAK placeholders to companies list")
-            company_list.extend(["BREAK"] * (num_mentors - num_companies))
-        
-        # Update counts after balancing
-        num_companies = len(company_list)
-        num_mentors = len(mentors)
-        logger.info(f"Balanced counts: {num_mentors} total slots (mentors + breaks), {num_companies} total slots (companies + breaks)")
-        
-        # Convert time slots to include date
-        date_time_slots = []
-        for slot in time_slots:
-            start_datetime = datetime.strptime(f"{date} {slot['start']}", '%Y-%m-%d %H:%M')
-            end_datetime = datetime.strptime(f"{date} {slot['end']}", '%Y-%m-%d %H:%M')
-            date_time_slots.append({
-                'start': start_datetime.isoformat(),
-                'end': end_datetime.isoformat()
-            })
-        
-        logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies, {len(date_time_slots)} time slots")
-        
-        # For each time slot
-        for slot_index, slot in enumerate(date_time_slots):
-            logger.info(f"Scheduling slot {slot_index+1}: {slot['start']} - {slot['end']}")
-            
-            # For each mentor in this slot
-            for mentor_index, mentor in enumerate(mentors):
-                # Get company in round-robin fashion
-                company_index = (slot_index + mentor_index) % num_companies
-                company = company_list[company_index]
-                
-                # Create formatted description with mentor details
-                details = mentor_details[mentor]
-                description = f"{mentor}, {details['role']}, {details['company']}: {details['bio']}"
-                
-                # Get the attendees (founder emails) for this company, handling BREAK case
-                try:
-                    attendees = companies[company]["emails"]
-                except KeyError:
-                    attendees = ""
-                
-                # Generate mentor URL for location field
-                mentor_url_name = convert_name_to_url_format(mentor)
-                location_url = f"https://techstars-ldn-mentor-lookbook.lovable.app/mentor/{mentor_url_name}"
-                
-                # Create the meeting entry
-                meeting = {
-                    'summary': f"{mentor} <> {company}",
-                    'start_time': slot['start'],
-                    'end_time': slot['end'],
-                    'company': company,
-                    'mentor': mentor,
-                    'description': description,
-                    'attendees': attendees,
-                    'location': location_url,
-                    'date': date
-                }
-                
-                schedule.append(meeting)
+            schedule.append(meeting)
     
     # Add debug information about total meetings created
     logger.info(f"Created a total of {len(schedule)} meetings")
@@ -232,33 +233,17 @@ def create_schedule(records, companies, target_date, time_slots):
 
 def main():
     try:
-        # Test the connection
-        response = requests.get(
-            AIRTABLE_API_URL,
-            headers=AIRTABLE_HEADERS,
-            params={'maxRecords': 1}
-        )
-        response.raise_for_status()
-        logger.info("Successfully connected to Airtable")
+        # Get target date from command line or user input, with refresh option
+        target_date = get_target_date_and_options()
+        logger.info(f"Scheduling meetings for date: {target_date}")
         
         # Load configuration
         companies = load_companies()
         time_slots = load_meeting_config()
+        mentors, mentor_details = load_mentors(target_date)
         
-        # Get target date from command line or user input
-        target_date = get_target_date()
-        logger.info(f"Filtering mentors for date: {target_date}")
-        
-        # Get all records
-        records = get_airtable_records()
-        logger.info(f"Found {len(records)} records in Airtable")
-        
-        # Debug: Print fields from first record
-        if records:
-            logger.info(f"Available fields in first record: {list(records[0]['fields'].keys())}")
-        
-        # Create schedule with target date and time slots
-        schedule = create_schedule(records, companies, target_date, time_slots)
+        # Create schedule
+        schedule = create_schedule(mentors, mentor_details, companies, target_date, time_slots)
         
         # Convert to DataFrame and save to CSV
         df = pd.DataFrame(schedule)
