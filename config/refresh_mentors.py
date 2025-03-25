@@ -50,14 +50,17 @@ def get_airtable_records():
     if not AIRTABLE_TOKEN or not AIRTABLE_BASE_ID:
         logger.error("Missing Airtable credentials. Please set AIRTABLE_TOKEN and AIRTABLE_BASE_ID in .env file.")
         sys.exit(1)
+    
+    # Extract just the base ID - it might contain other parts separated by /
+    base_id = AIRTABLE_BASE_ID.split('/')[0] if '/' in AIRTABLE_BASE_ID else AIRTABLE_BASE_ID
         
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_ID}"
+    url = f"https://api.airtable.com/v0/{base_id}/{AIRTABLE_TABLE_ID}"
     headers = {
         'Authorization': f'Bearer {AIRTABLE_TOKEN}',
         'Content-Type': 'application/json'
     }
     
-    logger.info(f"Fetching mentor data from Airtable (Base ID: {AIRTABLE_BASE_ID}, Table ID: {AIRTABLE_TABLE_ID})")
+    logger.info(f"Fetching mentor data from Airtable (Base ID: {base_id}, Table ID: {AIRTABLE_TABLE_ID})")
     logger.info(f"Using Token: {AIRTABLE_TOKEN[:10]}...")  # Only show first 10 chars for security
     
     try:

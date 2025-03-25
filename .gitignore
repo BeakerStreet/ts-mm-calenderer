@@ -40,6 +40,9 @@ output/meeting_schedule.csv
 !output/backups/.gitkeep
 !output/descriptions/.gitkeep
 !output/summaries/.gitkeep
+*.csv
+*.env
+.env
 
 # OS specific
 .DS_Store
