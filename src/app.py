@@ -17,31 +17,23 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
-# Timing parameters
-MEETING_DURATION = 15 
-FIRST_MTG_START = '09:30' # often after a briefing of some kind
-LAST_MTG_END = '13:40' # when does the last mtg end?
-LUNCH = False # are you doing lunch?
-LUNCH_START = '12:15' # lunch start time (if lunch)
-LUNCH_END = '12:15' # lunch end time (if lunch)
+# Path configurations
+CONFIG_PATHS = {
+    'companies': 'config/companies.csv',
+    'meeting_config': 'config/meeting_config.csv'
+}
 
-# Meeting slots configuration
-MEETING_SLOTS = {
-    'morning': {
-        'start_time': FIRST_MTG_START,
-        'end_time': LUNCH_START if LUNCH else LAST_MTG_END,
-        'break_duration': 10,  # minutes between meetings
-    },
-    'afternoon': {
-        'start_time': LUNCH_END if LUNCH else LAST_MTG_END,
-        'end_time': LAST_MTG_END,
-        'break_duration': 5,  # minutes between meetings
-    }
+# Output paths
+OUTPUT_PATHS = {
+    'descriptions': 'output/descriptions',
+    'summaries': 'output/summaries',
+    'backups': 'output/backups',
+    'schedule': 'output/meeting_schedule.csv'
 }
 
 def load_companies():
     """Load companies data from CSV file"""
-    companies_file = os.path.join('config', 'companies.csv')
+    companies_file = CONFIG_PATHS['companies']
     df = pd.read_csv(companies_file)
     
     # Convert DataFrame to dictionary format
@@ -52,8 +44,23 @@ def load_companies():
         }
     return companies
 
-# Load companies from CSV
-COMPANIES = load_companies()
+def load_meeting_config():
+    """Load meeting configuration from CSV file"""
+    config_file = CONFIG_PATHS['meeting_config']
+    df = pd.read_csv(config_file)
+    
+    # Extract meeting times from column headers (skip first column which is 'mentor')
+    time_slots = []
+    for col in df.columns[1:]:
+        # Parse the time range (e.g., "09:30-09:45")
+        start_time, end_time = col.split('-')
+        time_slots.append({
+            'start': start_time,
+            'end': end_time
+        })
+    
+    logger.info(f"Loaded {len(time_slots)} meeting slots from config")
+    return time_slots
 
 # Airtable setup
 AIRTABLE_TOKEN = os.getenv('AIRTABLE_TOKEN')
@@ -69,14 +76,6 @@ AIRTABLE_API_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TA
 AIRTABLE_HEADERS = {
     'Authorization': f'Bearer {AIRTABLE_TOKEN}',
     'Content-Type': 'application/json'
-}
-
-# Output paths
-OUTPUT_PATHS = {
-    'descriptions': 'output/descriptions',
-    'summaries': 'output/summaries',
-    'backups': 'output/backups',
-    'schedule': 'output/meeting_schedule.csv'
 }
 
 def get_target_date():
@@ -103,35 +102,6 @@ def get_airtable_records():
     response.raise_for_status()
     return response.json()['records']
 
-def generate_time_slots(date_str, num_slots):
-    """
-    Generate time slots for meetings based on configuration
-    """
-    slots = []
-    date = datetime.strptime(date_str, '%Y-%m-%d')
-    
-    # Process each time period (morning/afternoon)
-    for period, config in MEETING_SLOTS.items():
-        current_time = datetime.strptime(f"{date_str} {config['start_time']}", '%Y-%m-%d %H:%M')
-        end_time = datetime.strptime(f"{date_str} {config['end_time']}", '%Y-%m-%d %H:%M')
-        
-        while current_time < end_time:
-            start_time = current_time
-            end_time = start_time + timedelta(minutes=MEETING_DURATION)
-            
-            # Only add slot if it doesn't exceed the period end time
-            if end_time <= datetime.strptime(f"{date_str} {config['end_time']}", '%Y-%m-%d %H:%M'):
-                slots.append({
-                    'start': start_time.isoformat(),
-                    'end': end_time.isoformat()
-                })
-            
-            # Add break between meetings
-            current_time = end_time + timedelta(minutes=config['break_duration'])
-    
-    logger.info(f"Generated {len(slots)} meeting slots for {date_str}")
-    return slots
-
 def convert_name_to_url_format(name):
     """Convert a mentor name to URL format with lowercase and dashes instead of spaces"""
     # Remove any special characters and replace spaces with dashes
@@ -140,7 +110,7 @@ def convert_name_to_url_format(name):
     url_name = '-'.join([part for part in url_name.split() if part])
     return url_name
 
-def create_schedule(records, companies, target_date):
+def create_schedule(records, companies, target_date, time_slots):
     """Create a schedule of meetings between companies and mentors"""
     schedule = []
     
@@ -204,14 +174,20 @@ def create_schedule(records, companies, target_date):
         num_mentors = len(mentors)
         logger.info(f"Balanced counts: {num_mentors} total slots (mentors + breaks), {num_companies} total slots (companies + breaks)")
         
-        # Determine number of slots needed based on the larger of mentors or companies
-        num_slots = max(num_mentors, num_companies)
-        time_slots = generate_time_slots(date, num_slots)
+        # Convert time slots to include date
+        date_time_slots = []
+        for slot in time_slots:
+            start_datetime = datetime.strptime(f"{date} {slot['start']}", '%Y-%m-%d %H:%M')
+            end_datetime = datetime.strptime(f"{date} {slot['end']}", '%Y-%m-%d %H:%M')
+            date_time_slots.append({
+                'start': start_datetime.isoformat(),
+                'end': end_datetime.isoformat()
+            })
         
-        logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies, {num_slots} slots")
+        logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies, {len(date_time_slots)} time slots")
         
         # For each time slot
-        for slot_index, slot in enumerate(time_slots):
+        for slot_index, slot in enumerate(date_time_slots):
             logger.info(f"Scheduling slot {slot_index+1}: {slot['start']} - {slot['end']}")
             
             # For each mentor in this slot
@@ -265,6 +241,10 @@ def main():
         response.raise_for_status()
         logger.info("Successfully connected to Airtable")
         
+        # Load configuration
+        companies = load_companies()
+        time_slots = load_meeting_config()
+        
         # Get target date from command line or user input
         target_date = get_target_date()
         logger.info(f"Filtering mentors for date: {target_date}")
@@ -277,8 +257,8 @@ def main():
         if records:
             logger.info(f"Available fields in first record: {list(records[0]['fields'].keys())}")
         
-        # Create schedule with target date
-        schedule = create_schedule(records, COMPANIES, target_date)
+        # Create schedule with target date and time slots
+        schedule = create_schedule(records, companies, target_date, time_slots)
         
         # Convert to DataFrame and save to CSV
         df = pd.DataFrame(schedule)
