@@ -112,11 +112,11 @@ def create_calendar_event(service, event_data, calendar_id):
         attendees = [{'email': email.strip()} for email in attendees_field.split(',') if email.strip()]
         event['attendees'] = attendees
     
-    # Create the event
+    # Create the event with no notifications by default
     created_event = service.events().insert(
         calendarId=calendar_id,
         body=event,
-        sendUpdates='all'
+        sendUpdates='none'
     ).execute()
     
     logger.info(f"Successfully created event with ID: {created_event.get('id')}")
@@ -133,7 +133,7 @@ def main():
         # Parse command line arguments
         parser = argparse.ArgumentParser(description="Add calendar events for mentor meetings")
         parser.add_argument("--date", help="Date in YYYY-MM-DD format for which to create events")
-        parser.add_argument("--test", action="store_true", help="Enable test mode (no notifications sent)")
+        parser.add_argument("--test", action="store_true", help="Enable test mode (no attendees included)")
         args = parser.parse_args()
         
         # Define paths
