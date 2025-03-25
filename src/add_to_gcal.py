@@ -4,6 +4,7 @@ import logging
 import pandas as pd
 import time
 import sys
+import argparse
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -129,6 +130,12 @@ def test_mode(df):
 
 def main():
     try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description="Add calendar events for mentor meetings")
+        parser.add_argument("--date", help="Date in YYYY-MM-DD format for which to create events")
+        parser.add_argument("--test", action="store_true", help="Enable test mode (no notifications sent)")
+        args = parser.parse_args()
+        
         # Define paths
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.abspath(os.path.join(current_dir, '..'))
@@ -143,7 +150,7 @@ def main():
         logger.info(f"Loaded {total_events} events from {csv_file}")
         
         # Check if test mode is enabled
-        if len(sys.argv) > 1 and sys.argv[1] == '--test':
+        if args.test:
             df = test_mode(df)
             logger.info("Test mode enabled - no notifications will be sent")
         
@@ -152,21 +159,32 @@ def main():
         df['date'] = df['start_time'].apply(lambda x: x.split('T')[0])
         unique_dates = sorted(df['date'].unique())
         
-        # Display available dates to the user
-        print("\nAvailable dates for calendar events:")
-        for i, date in enumerate(unique_dates):
-            print(f"{i+1}. {date}")
+        selected_date = None
         
-        # Prompt user to select a date
-        selection = input("\nEnter the number of the date for which you want to create events: ")
-        try:
-            date_index = int(selection) - 1
-            if date_index < 0 or date_index >= len(unique_dates):
-                raise ValueError("Invalid selection")
-            selected_date = unique_dates[date_index]
-        except (ValueError, IndexError):
-            logger.error("Invalid date selection. Exiting.")
-            return
+        # If date is provided as argument, use it
+        if args.date:
+            if args.date in unique_dates:
+                selected_date = args.date
+                logger.info(f"Using provided date: {selected_date}")
+            else:
+                logger.error(f"Provided date {args.date} not found in available dates: {unique_dates}")
+                return
+        else:
+            # Display available dates to the user
+            print("\nAvailable dates for calendar events:")
+            for i, date in enumerate(unique_dates):
+                print(f"{i+1}. {date}")
+            
+            # Prompt user to select a date
+            selection = input("\nEnter the number of the date for which you want to create events: ")
+            try:
+                date_index = int(selection) - 1
+                if date_index < 0 or date_index >= len(unique_dates):
+                    raise ValueError("Invalid selection")
+                selected_date = unique_dates[date_index]
+            except (ValueError, IndexError):
+                logger.error("Invalid date selection. Exiting.")
+                return
         
         # Filter events for the selected date
         date_events = df[df['date'] == selected_date]
