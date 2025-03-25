@@ -8,9 +8,7 @@ import os
 import sys
 import pandas as pd
 from datetime import datetime, timedelta
-import argparse
 import logging
-import random
 
 # Configure logging
 logging.basicConfig(
@@ -25,7 +23,7 @@ def parse_time(time_str):
         return datetime.strptime(time_str, "%H:%M")
     except ValueError:
         logger.error(f"Invalid time format: {time_str}. Please use HH:MM format.")
-        sys.exit(1)
+        return None
 
 def generate_meeting_times(
     mtg_length, 
@@ -34,8 +32,7 @@ def generate_meeting_times(
     break_length, 
     has_lunch, 
     lunch_length, 
-    first_mtg_start, 
-    last_mtg_end
+    first_mtg_start
 ):
     """
     Generate meeting start and end times based on parameters
@@ -48,31 +45,26 @@ def generate_meeting_times(
         has_lunch (bool): Whether to include a lunch break
         lunch_length (int): Length of lunch break in minutes (if has_lunch)
         first_mtg_start (str): Start time of first meeting (HH:MM)
-        last_mtg_end (str): End time of last meeting (HH:MM)
         
     Returns:
         list: List of dictionaries with meeting info
     """
     # Parse time strings to datetime objects
     start_time = parse_time(first_mtg_start)
-    end_time_limit = parse_time(last_mtg_end)
+    
+    if start_time is None:
+        return []
     
     # Set the date to today (we only care about time)
     today = datetime.today().date()
     start_time = datetime.combine(today, start_time.time())
-    end_time_limit = datetime.combine(today, end_time_limit.time())
     
     meetings = []
     current_time = start_time
     meeting_count = 0
     
-    while meeting_count < num_meetings and current_time < end_time_limit:
+    while meeting_count < num_meetings:
         meeting_end = current_time + timedelta(minutes=mtg_length)
-        
-        # Check if this meeting would exceed the end time limit
-        if meeting_end > end_time_limit:
-            logger.warning(f"Cannot fit {num_meetings} meetings with the given parameters.")
-            break
         
         meetings.append({
             "start": current_time.strftime("%H:%M"),
@@ -83,7 +75,7 @@ def generate_meeting_times(
         meeting_count += 1
         
         # Add break time if applicable
-        if has_breaks:
+        if has_breaks and meeting_count < num_meetings:
             current_time = meeting_end + timedelta(minutes=break_length)
         else:
             current_time = meeting_end
@@ -143,52 +135,113 @@ def update_csv_with_schedule(meetings, output_file):
         logger.error(f"Error updating CSV: {str(e)}")
         sys.exit(1)
 
+def get_integer_input(prompt, default=None, min_value=1, max_value=None):
+    """Get integer input from user with validation"""
+    default_str = f" [{default}]" if default is not None else ""
+    
+    while True:
+        try:
+            value = input(f"{prompt}{default_str}: ").strip()
+            if value == "" and default is not None:
+                return default
+            
+            value = int(value)
+            if value < min_value:
+                print(f"Value must be at least {min_value}. Please try again.")
+                continue
+                
+            if max_value is not None and value > max_value:
+                print(f"Value must be at most {max_value}. Please try again.")
+                continue
+                
+            return value
+        except ValueError:
+            print("Please enter a valid integer.")
+
+def get_time_input(prompt, default=None):
+    """Get time input from user with validation"""
+    default_str = f" [{default}]" if default is not None else ""
+    
+    while True:
+        time_str = input(f"{prompt}{default_str}: ").strip()
+        if time_str == "" and default is not None:
+            return default
+            
+        try:
+            # Validate time format
+            datetime.strptime(time_str, "%H:%M")
+            return time_str
+        except ValueError:
+            print("Invalid time format. Please use HH:MM format (e.g., 09:30).")
+
+def get_yes_no_input(prompt, default=None):
+    """Get yes/no input from user"""
+    default_str = ""
+    if default is not None:
+        default_str = " [Y/n]" if default else " [y/N]"
+    
+    while True:
+        response = input(f"{prompt}{default_str}: ").strip().lower()
+        if response == "" and default is not None:
+            return default
+            
+        if response in ["y", "yes"]:
+            return True
+        elif response in ["n", "no"]:
+            return False
+        else:
+            print("Please enter 'y' or 'n'.")
+
 def main():
-    parser = argparse.ArgumentParser(description="Configure meeting schedule parameters")
+    print("\n=== Mentor Meeting Schedule Configuration ===\n")
     
-    parser.add_argument("--mtg_length", type=int, help="Length of each meeting in minutes", default=15)
-    parser.add_argument("--num_meetings", type=int, help="Number of meetings", default=8)
-    parser.add_argument("--breaks", action="store_true", help="Include breaks between meetings")
-    parser.add_argument("--break_length", type=int, help="Length of breaks in minutes", default=5)
-    parser.add_argument("--lunch", action="store_true", help="Include a lunch break")
-    parser.add_argument("--lunch_length", type=int, help="Length of lunch break in minutes", default=30)
-    parser.add_argument("--first_mtg_start", type=str, help="Start time of first meeting (HH:MM)", default="09:30")
-    parser.add_argument("--last_mtg_end", type=str, help="End time of last meeting (HH:MM)", default="13:40")
-    parser.add_argument("--output", type=str, help="Output file path", default="config/meeting_config.csv")
+    # Get user inputs
+    mtg_length = get_integer_input("Meeting length in minutes", default=15, min_value=5)
+    num_meetings = get_integer_input("Number of meetings", default=8, min_value=1)
     
-    args = parser.parse_args()
+    has_breaks = get_yes_no_input("Include breaks between meetings", default=True)
+    break_length = 0
+    if has_breaks:
+        break_length = get_integer_input("Break length in minutes", default=5, min_value=1)
+    
+    has_lunch = get_yes_no_input("Include a lunch break", default=False)
+    lunch_length = 0
+    if has_lunch:
+        lunch_length = get_integer_input("Lunch break length in minutes", default=30, min_value=10)
+    
+    first_mtg_start = get_time_input("Start time of first meeting (HH:MM)", default="09:30")
+    
+    # Provide default output file path with option to change it
+    default_output = "config/meeting_config.csv"
+    custom_output = get_yes_no_input(f"Use default output path ({default_output})", default=True)
+    output_file = default_output
+    if not custom_output:
+        output_file = input("Enter output file path: ").strip() or default_output
     
     # Generate meeting times
     meetings = generate_meeting_times(
-        args.mtg_length,
-        args.num_meetings,
-        args.breaks,
-        args.break_length,
-        args.lunch,
-        args.lunch_length,
-        args.first_mtg_start,
-        args.last_mtg_end
+        mtg_length,
+        num_meetings,
+        has_breaks,
+        break_length,
+        has_lunch,
+        lunch_length,
+        first_mtg_start
     )
     
+    if not meetings:
+        logger.error("Failed to generate meeting schedule. Please check your inputs.")
+        return
+    
     # Update CSV with schedule and mentor slots
-    update_csv_with_schedule(meetings, args.output)
+    update_csv_with_schedule(meetings, output_file)
     
-    # Also output app.py configuration values for manual update
-    logger.info("\nTo update app.py with these settings, use the following values:")
-    logger.info(f"MEETING_DURATION = {args.mtg_length}")
-    logger.info(f"FIRST_MTG_START = '{args.first_mtg_start}'")
-    logger.info(f"LAST_MTG_END = '{args.last_mtg_end}'")
-    logger.info(f"LUNCH = {args.lunch}")
-    if args.lunch:
-        lunch_start = parse_time(args.first_mtg_start)
-        for i in range(args.num_meetings // 2):
-            lunch_start = lunch_start + timedelta(minutes=args.mtg_length)
-            if args.breaks and i < args.num_meetings // 2 - 1:
-                lunch_start = lunch_start + timedelta(minutes=args.break_length)
-        
-        logger.info(f"LUNCH_START = '{lunch_start.strftime('%H:%M')}'")
-        lunch_end = lunch_start + timedelta(minutes=args.lunch_length)
-        logger.info(f"LUNCH_END = '{lunch_end.strftime('%H:%M')}'")
-    
+    # Display final schedule summary
+    print("\nSchedule configuration completed successfully.")
+    print(f"Meeting schedule has been saved to: {output_file}")
+    last_meeting = meetings[-1]
+    print(f"Schedule runs from {first_mtg_start} to {last_meeting['end']}")
+    print(f"Total meetings: {num_meetings}")
+
 if __name__ == "__main__":
     main() 
