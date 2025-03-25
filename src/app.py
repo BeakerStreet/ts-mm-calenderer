@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 import sys
 import argparse
 import subprocess
-from generate_mentor_descriptions import generate_mentor_descriptions
-from generate_daily_summaries import generate_daily_summaries
+from mentor_text import generate_mentor_descriptions
+from day_summary import generate_daily_summaries
 
 # Configure logging
 logging.basicConfig(

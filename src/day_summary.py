@@ -43,9 +43,6 @@ def generate_daily_summaries(date_str=None):
             lambda x: pd.Series(x['company'].values, index=x['start_time'].dt.strftime('%H:%M').values)
         ).reset_index()
         
-        # Add lunch break column at 11:55
-        time_slots['11:55'] = 'LUNCH'
-        
         # Sort columns by time
         time_slots = time_slots.reindex(columns=['mentor'] + sorted(time_slots.columns[1:]))
         
