@@ -4,6 +4,8 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import sys
+import argparse
 
 # Configure logging
 logging.basicConfig(
@@ -31,53 +33,68 @@ AIRTABLE_HEADERS = {
     'Content-Type': 'application/json'
 }
 
+def get_target_date():
+    """Get the target date from command line arguments or user input"""
+    parser = argparse.ArgumentParser(description='Generate mentor meeting schedule')
+    parser.add_argument('--date', type=str, help='Target date in YYYY-MM-DD format')
+    args = parser.parse_args()
+    
+    if args.date:
+        return args.date
+    
+    while True:
+        date_str = input("Enter target date (YYYY-MM-DD): ").strip()
+        try:
+            # Validate date format
+            datetime.strptime(date_str, '%Y-%m-%d')
+            return date_str
+        except ValueError:
+            print("Invalid date format. Please use YYYY-MM-DD format.")
+
 def get_airtable_records():
     """Fetch all records from Airtable"""
     response = requests.get(AIRTABLE_API_URL, headers=AIRTABLE_HEADERS)
     response.raise_for_status()
     return response.json()['records']
 
-def generate_time_slots(date_str):
+def generate_time_slots(date_str, num_slots):
     """
-    Generate time slots for 8 simultaneous meetings with breaks:
-    Event          Start    End
-    Meeting 1      9:30     9:55
-    Meeting 2      10:00    10:25
-    Meeting 3      10:30    10:55
-    Meeting 4      11:00    11:25
-    Meeting 5      11:30    11:55
-    Lunch (30 min) 11:55    12:25
-    Meeting 6      12:25    12:55
-    Meeting 7      13:00    13:25
-    Meeting 8      13:30    13:55
+    Generate time slots for meetings with specific timing pattern:
+    - Morning slots: 9:30-9:55, 10:00-10:25, 10:30-10:55, 11:00-11:25, 11:30-11:55
+    - Afternoon slots: 12:15-12:40, 12:45-13:10, 13:15-13:40
     """
     slots = []
     date = datetime.strptime(date_str, '%Y-%m-%d')
     
-    # Define the exact time slots as specified
-    time_ranges = [
-        ('09:30', '09:55'),
-        ('10:00', '10:25'),
-        ('10:30', '10:55'),
-        ('11:00', '11:25'),
-        ('11:30', '11:55'),
-        # Lunch break 11:55 - 12:25
-        ('12:25', '12:55'),
-        ('13:00', '13:25'),
-        ('13:30', '13:55')
-    ]
-    
-    # Create slots based on the specified time ranges
-    for start_str, end_str in time_ranges:
-        start_time = datetime.strptime(f"{date_str} {start_str}", '%Y-%m-%d %H:%M')
-        end_time = datetime.strptime(f"{date_str} {end_str}", '%Y-%m-%d %H:%M')
+    # Morning slots (9:30 - 11:55)
+    current_time = datetime.strptime(f"{date_str} 09:30", '%Y-%m-%d %H:%M')
+    for i in range(5):  # First 5 slots
+        start_time = current_time
+        end_time = start_time + timedelta(minutes=25)
         
         slots.append({
             'start': start_time.isoformat(),
             'end': end_time.isoformat()
         })
+        
+        # Add 5-minute break between slots
+        current_time = end_time + timedelta(minutes=5)
     
-    logger.info(f"Generated {len(slots)} meeting slots for {date_str}, with a lunch break from 11:55 to 12:25")
+    # Afternoon slots (12:15 - 13:40)
+    current_time = datetime.strptime(f"{date_str} 12:15", '%Y-%m-%d %H:%M')
+    for i in range(3):  # Remaining 3 slots
+        start_time = current_time
+        end_time = start_time + timedelta(minutes=25)
+        
+        slots.append({
+            'start': start_time.isoformat(),
+            'end': end_time.isoformat()
+        })
+        
+        # Add 5-minute break between slots
+        current_time = end_time + timedelta(minutes=5)
+    
+    logger.info(f"Generated {len(slots)} meeting slots for {date_str}")
     
     return slots
 
@@ -89,7 +106,7 @@ def convert_name_to_url_format(name):
     url_name = '-'.join([part for part in url_name.split() if part])
     return url_name
 
-def create_schedule(records, companies, companies_with_emails):
+def create_schedule(records, companies, target_date):
     """Create a schedule of meetings between companies and mentors"""
     schedule = []
     
@@ -97,10 +114,24 @@ def create_schedule(records, companies, companies_with_emails):
     date_groups = {}
     mentor_details = {}  # Store mentor details for descriptions
     
+    # Log all dates found in records
+    logger.info("\n=== Available Dates in Records ===")
+    all_dates = set()
+    for record in records:
+        fields = record['fields']
+        if 'Date' in fields:
+            all_dates.add(fields['Date'])
+    logger.info(f"Found dates: {sorted(list(all_dates))}")
+    logger.info(f"Looking for date: {target_date}")
+    
     for record in records:
         fields = record['fields']
         if 'Date' in fields and 'Name' in fields:
             date = fields['Date']
+            # Only process records for the target date
+            if date != target_date:
+                continue
+                
             if date not in date_groups:
                 date_groups[date] = []
             
@@ -118,50 +149,52 @@ def create_schedule(records, companies, companies_with_emails):
             
             # Add mentor to this date group
             date_groups[date].append(mentor_name)
-    
+
     # For each date, create the schedule
     for date, mentors in date_groups.items():
-        time_slots = generate_time_slots(date)
-        num_companies = len(companies)
+        # Convert companies dict to list for ordered iteration
+        company_list = list(companies.keys())
+        num_companies = len(company_list)
         num_mentors = len(mentors)
         
-        logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies")
+        # Balance the lists by adding BREAK placeholders to the shorter list
+        if num_mentors < num_companies:
+            logger.info(f"Adding {num_companies - num_mentors} BREAK placeholders to mentors list")
+            mentors.extend(["BREAK"] * (num_companies - num_mentors))
+        elif num_companies < num_mentors:
+            logger.info(f"Adding {num_mentors - num_companies} BREAK placeholders to companies list")
+            company_list.extend(["BREAK"] * (num_mentors - num_companies))
+        
+        # Update counts after balancing
+        num_companies = len(company_list)
+        num_mentors = len(mentors)
+        logger.info(f"Balanced counts: {num_mentors} total slots (mentors + breaks), {num_companies} total slots (companies + breaks)")
+        
+        # Determine number of slots needed based on the larger of mentors or companies
+        num_slots = max(num_mentors, num_companies)
+        time_slots = generate_time_slots(date, num_slots)
+        
+        logger.info(f"Scheduling for date {date}: {len(mentors)} mentors, {num_companies} companies, {num_slots} slots")
         
         # For each time slot
         for slot_index, slot in enumerate(time_slots):
             logger.info(f"Scheduling slot {slot_index+1}: {slot['start']} - {slot['end']}")
             
-            # Determine which mentor gets the break in this slot (rotate through all mentors)
-            break_mentor_index = slot_index % num_mentors
-            break_mentor = mentors[break_mentor_index]
-            
-            # Create a BREAK event for the selected mentor
-            meeting = {
-                'summary': f"{break_mentor} <> BREAK",
-                'start_time': slot['start'],
-                'end_time': slot['end'],
-                'company': "BREAK",
-                'mentor': break_mentor,
-                'description': f"Break time for {break_mentor}",
-                'attendees': '',
-                'location': '',
-                'date': date
-            }
-            schedule.append(meeting)
-            
-            # Create meetings for all other mentors with companies
-            available_mentors = [m for m in mentors if m != break_mentor]
-            for mentor_index, mentor in enumerate(available_mentors):
-                # Rotate through companies based on the slot index
+            # For each mentor in this slot
+            for mentor_index, mentor in enumerate(mentors):
+                # Get company in round-robin fashion
                 company_index = (slot_index + mentor_index) % num_companies
-                company = companies[company_index]
+                company = company_list[company_index]
                 
                 # Create formatted description with mentor details
                 details = mentor_details[mentor]
                 description = f"{mentor}, {details['role']}, {details['company']}: {details['bio']}"
                 
-                # Get the attendees (founder emails) for this company
-                attendees = companies_with_emails.get(company, '')
+                # Get the attendees (founder emails) for this company, handling BREAK case
+                try:
+                    attendees = companies[company]["emails"]
+                except KeyError:
+                    attendees = ""
                 
                 # Generate mentor URL for location field
                 mentor_url_name = convert_name_to_url_format(mentor)
@@ -185,10 +218,6 @@ def create_schedule(records, companies, companies_with_emails):
     # Add debug information about total meetings created
     logger.info(f"Created a total of {len(schedule)} meetings")
     
-    # Count break events
-    break_count = sum(1 for meeting in schedule if meeting['company'] == "BREAK")
-    logger.info(f"Schedule includes {break_count} break events for mentors")
-    
     return schedule
 
 def main():
@@ -202,30 +231,34 @@ def main():
         response.raise_for_status()
         logger.info("Successfully connected to Airtable")
         
-        # Define companies (hardcoded list)
-        companies = [
-            'Alethica',
-            'Ovida',
-            'Parasol',
-            'PrettyData',
-            'Renn',
-            'Tova',
-            'Solim Health'
-        ]
+        # Get target date from command line or user input
+        target_date = get_target_date()
+        logger.info(f"Filtering mentors for date: {target_date}")
         
         # Define companies with their founder emails
-        companies_with_emails = {
-            'Alethica': 'faisal.ghaffar@alethica.com, aurelia.lefrapper@alethica.com',
-            'Ovida': 'alex@ovida.io',
-            'Renn': 'matan@getrenn.com, nleinov@gmail.com',
-            'PrettyData': 'bww@prettydata.co',
-            'Tova': 'alexa@tova.earth',
-            'Solim Health': 'basnetabhaya@gmail.com, tonyelvis-steven@hotmail.com',
-            'Parasol': 'Kasparharsaae@parasolplatforms.com, momirzan@parasolplatforms.com'
+        companies = {
+            'Alethica': {
+                'emails': 'faisal.ghaffar@alethica.com, aurelia.lefrapper@alethica.com'
+            },
+            'Ovida': {
+                'emails': 'alex@ovida.io'
+            },
+            'Renn': {
+                'emails': 'matan@getrenn.com, nleinov@gmail.com'
+            },
+            'PrettyData': {
+                'emails': 'bww@prettydata.co'
+            },
+            'Tova': {
+                'emails': 'alexa@tova.earth'
+            },
+            'Solim Health': {
+                'emails': 'basnetabhaya@gmail.com, tonyelvis-steven@hotmail.com'
+            },
+            'Parasol': {
+                'emails': 'Kasparharsaae@parasolplatforms.com, momirzan@parasolplatforms.com'
+            }
         }
-        
-        # Get company names to maintain the same order as before
-        companies = list(companies_with_emails.keys())
         
         # Get all records
         records = get_airtable_records()
@@ -235,8 +268,8 @@ def main():
         if records:
             logger.info(f"Available fields in first record: {list(records[0]['fields'].keys())}")
         
-        # Create schedule
-        schedule = create_schedule(records, companies, companies_with_emails)
+        # Create schedule with target date
+        schedule = create_schedule(records, companies, target_date)
         
         # Convert to DataFrame and save to CSV
         df = pd.DataFrame(schedule)

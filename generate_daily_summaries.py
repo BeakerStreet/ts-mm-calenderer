@@ -20,58 +20,41 @@ def format_time(time_str):
     """Format time string from ISO format to human-readable format (HH:MM)"""
     return datetime.fromisoformat(time_str).strftime('%H:%M')
 
-def generate_daily_summaries(schedule_df, target_date=None):
-    """Generate daily meeting summary tables in CSV format"""
-    logger.info(f"Generating daily summaries for date: {target_date if target_date else 'all dates'}")
+def generate_daily_summaries(date_str=None):
+    """Generate daily summaries for the meeting schedule."""
+    logger.info("Reading meeting schedule from meeting_schedule.csv")
+    df = pd.read_csv('meeting_schedule.csv')
     
-    # Create the output directory if it doesn't exist
-    output_dir = 'daily_summaries'
-    os.makedirs(output_dir, exist_ok=True)
+    if date_str and date_str != 'all dates':
+        df = df[df['date'] == date_str]
     
-    # Filter the schedule for the target date if specified
-    if target_date:
-        schedule_df = schedule_df[schedule_df['date'] == target_date]
-        if schedule_df.empty:
-            logger.warning(f"No meetings found for date {target_date}")
-            return
+    # Convert start_time to datetime
+    df['start_time'] = pd.to_datetime(df['start_time'])
     
-    # Group by date
-    date_groups = schedule_df.groupby('date')
+    # Get unique dates
+    dates = df['date'].unique()
     
-    for date, day_schedule in date_groups:
-        # Get unique mentors for this day
-        mentors = sorted(day_schedule['mentor'].unique())
+    for date in dates:
+        logger.info(f"Generating daily summary for date: {date}")
+        day_schedule = df[df['date'] == date].copy()
         
-        # Create a pivot table with mentors as index and time slots as columns
-        pivot_df = pd.pivot_table(
-            day_schedule,
-            values='company',
-            index='mentor',
-            columns=day_schedule.groupby('mentor').cumcount() + 1,
-            aggfunc='first'
-        )
-        
-        # Get the start times for each meeting slot
+        # Get time slots for each mentor
         time_slots = day_schedule.groupby('mentor').apply(
-            lambda x: x.sort_values('start_time')['start_time'].apply(format_time).tolist()
-        ).iloc[0]  # All mentors have the same time slots
+            lambda x: pd.Series(x['company'].values, index=x['start_time'].dt.strftime('%H:%M').values)
+        ).reset_index()
         
-        # Add lunch break column after the 5th meeting (11:20)
-        time_slots.insert(5, '11:50')  # Add lunch break time
-        pivot_df.insert(5, '11:50', 'LUNCH')  # Add lunch break column
+        # Add lunch break column at 11:55
+        time_slots['11:55'] = 'LUNCH'
         
-        # Rename columns to use start times
-        pivot_df.columns = time_slots
-        
-        # Sort by mentor name
-        pivot_df = pivot_df.sort_index()
-        
-        # Create output filename
-        output_file = os.path.join(output_dir, f'meeting_summary_{date}.csv')
+        # Sort columns by time
+        time_slots = time_slots.reindex(columns=['mentor'] + sorted(time_slots.columns[1:]))
         
         # Save to CSV
-        pivot_df.to_csv(output_file)
+        output_file = f'daily_summaries/meeting_summary_{date}.csv'
+        time_slots.to_csv(output_file, index=False)
         logger.info(f"Created daily summary for {date} at {output_file}")
+    
+    logger.info("Daily summary generation complete!")
 
 def main():
     """Main function"""
@@ -83,7 +66,7 @@ def main():
     schedule_df = read_meeting_schedule()
     
     # Generate summaries
-    generate_daily_summaries(schedule_df, args.date)
+    generate_daily_summaries(args.date)
     
     logger.info("Daily summary generation complete!")
 

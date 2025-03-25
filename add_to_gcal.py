@@ -111,37 +111,11 @@ def create_calendar_event(service, event_data, calendar_id):
     logger.info(f"Successfully created event with ID: {created_event.get('id')}")
     return created_event.get('id')
 
-def check_existing_events(service, calendar_id, event):
-    """Check if an event with similar properties already exists to avoid duplicates"""
-    # Get the start time from event
-    start_time = event['start']['dateTime']
-    
-    # Extract date for time range query (start of day to end of day)
-    event_date = start_time.split('T')[0]
-    time_min = f"{event_date}T00:00:00Z"
-    time_max = f"{event_date}T23:59:59Z"
-    
-    # Query for events on this date with the same title
-    events_result = service.events().list(
-        calendarId=calendar_id,
-        timeMin=time_min,
-        timeMax=time_max,
-        q=event['summary'],  # Search by summary/title
-        singleEvents=True,
-        orderBy='startTime'
-    ).execute()
-    
-    events = events_result.get('items', [])
-    
-    # Filter for events with matching summary and very close start time (within 1 minute)
-    matching_events = []
-    for existing_event in events:
-        if (existing_event.get('summary') == event['summary'] and
-            abs(pd.Timestamp(existing_event['start']['dateTime']) - 
-                pd.Timestamp(event['start']['dateTime'])).total_seconds() < 60):
-            matching_events.append(existing_event)
-            
-    return matching_events
+def test_mode(df):
+    """Modify the dataframe to clear all attendees for testing"""
+    logger.info("Entering test mode - clearing all attendees")
+    df['attendees'] = ''
+    return df
 
 def main():
     try:
@@ -153,6 +127,11 @@ def main():
         df = pd.read_csv(csv_file)
         total_events = len(df)
         logger.info(f"Loaded {total_events} events from {csv_file}")
+        
+        # Check if test mode is enabled
+        if len(sys.argv) > 1 and sys.argv[1] == '--test':
+            df = test_mode(df)
+            logger.info("Test mode enabled - no notifications will be sent")
         
         # Extract unique dates from the dataframe
         # Assuming the start_time is in ISO format like '2023-11-15T09:00:00'
