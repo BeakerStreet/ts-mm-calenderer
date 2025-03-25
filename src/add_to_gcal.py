@@ -25,9 +25,19 @@ def get_google_calendar_service():
     logger.info("Initializing Google Calendar service")
     creds = None
     
-    if os.path.exists('token.pickle'):
-        logger.info("Found existing token.pickle file")
-        with open('token.pickle', 'rb') as token:
+    # Define the directory where this script is located
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(current_dir, '..'))
+    
+    # Path to token file
+    token_path = os.path.join(project_root, 'token.pickle')
+    
+    # Path to credentials file
+    credentials_path = os.path.join(project_root, 'credentials.json')
+    
+    if os.path.exists(token_path):
+        logger.info(f"Found existing token file at {token_path}")
+        with open(token_path, 'rb') as token:
             creds = pickle.load(token)
     
     if not creds or not creds.valid:
@@ -35,13 +45,13 @@ def get_google_calendar_service():
             logger.info("Refreshing expired credentials")
             creds.refresh(Request())
         else:
-            logger.info("No valid credentials found. Starting OAuth flow")
+            logger.info(f"No valid credentials found. Starting OAuth flow using {credentials_path}")
             flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
+                credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
         
-        logger.info("Saving credentials to token.pickle")
-        with open('token.pickle', 'wb') as token:
+        logger.info(f"Saving credentials to {token_path}")
+        with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
 
     return build('calendar', 'v3', credentials=creds)
@@ -119,8 +129,12 @@ def test_mode(df):
 
 def main():
     try:
+        # Define paths
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(current_dir, '..'))
+        
         # Read the schedule from CSV
-        csv_file = 'meeting_schedule.csv'
+        csv_file = os.path.join(project_root, 'output', 'meeting_schedule.csv')
         if not os.path.exists(csv_file):
             raise FileNotFoundError(f"Schedule file {csv_file} not found. Run app.py first to generate it.")
         

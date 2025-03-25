@@ -43,6 +43,8 @@ output/meeting_schedule.csv
 *.csv
 *.env
 .env
+credentials.json
+token.pickle
 
 # OS specific
 .DS_Store

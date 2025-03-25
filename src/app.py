@@ -138,7 +138,7 @@ def get_target_date_and_options():
     """Get the target date and options from command line arguments or user input"""
     parser = argparse.ArgumentParser(description='Generate mentor meeting schedule')
     parser.add_argument('--date', type=str, help='Target date in YYYY-MM-DD format')
-    parser.add_argument('--refresh', action='store_true', help='Refresh mentors data from Airtable')
+    parser.add_argument('--cache', action='store_true', help='Use cached mentor data instead of refreshing from Airtable')
     args = parser.parse_args()
     
     # If date is specified via command line, validate and use it
@@ -148,8 +148,8 @@ def get_target_date_and_options():
             datetime.strptime(args.date, '%Y-%m-%d')
             selected_date = args.date
             
-            # If refresh is also specified via command line, do it
-            if args.refresh:
+            # By default, refresh mentors unless --cache is specified
+            if not args.cache:
                 refresh_mentors(selected_date)
                 
             return selected_date
@@ -157,8 +157,9 @@ def get_target_date_and_options():
             logger.error(f"Invalid date format: {args.date}. Please use YYYY-MM-DD format.")
             # Continue to interactive date selection
     
-    # Check if we need to refresh first to get available dates
-    if args.refresh:
+    # Always refresh first to get available dates, unless --cache is specified
+    if not args.cache:
+        logger.info("Refreshing mentor data from Airtable (use --cache to skip)")
         refresh_mentors()  # Full refresh to get all available dates
     
     # Get available dates from mentors.csv
@@ -211,9 +212,11 @@ def get_target_date_and_options():
             except ValueError:
                 print("Please enter a valid number")
         
-        # Ask if user wants to refresh the data for this specific date
-        if not args.refresh and input(f"\nRefresh mentors data from Airtable for {selected_date}? (y/n): ").lower().startswith('y'):
+        # By default, refresh data for the selected date unless --cache is specified
+        if not args.cache:
             refresh_mentors(selected_date)
+        else:
+            logger.info("Using cached mentor data (--cache flag used)")
         
         return selected_date
     
@@ -221,16 +224,16 @@ def get_target_date_and_options():
         logger.error(f"Error reading available dates: {str(e)}")
         
         # If we can't read dates for some reason, ask if user wants to refresh
-        if input("Would you like to refresh mentors data from Airtable? (y/n): ").lower().startswith('y'):
+        if not args.cache and input("Would you like to refresh mentors data from Airtable? (y/n): ").lower().startswith('y'):
             refresh_mentors()  # Full refresh since we don't have a date yet
             
         # Fall back to manual entry
         date_input = input("Enter target date (YYYY-MM-DD): ").strip()
         
         # Ask if user wants to refresh for this specific date
-        if input(f"\nRefresh mentors data from Airtable for {date_input}? (y/n): ").lower().startswith('y'):
+        if not args.cache:
             refresh_mentors(date_input)
-            
+        
         return date_input
 
 def convert_name_to_url_format(name):
