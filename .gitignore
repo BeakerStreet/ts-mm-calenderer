@@ -24,7 +24,6 @@ wheels/
 venv/
 ENV/
 env/
-.env
 
 # IDE
 .idea/
@@ -32,21 +31,21 @@ env/
 *.swp
 *.swo
 
-# OS
+# Project specific
+config/credentials.json
+output/backups/*
+output/descriptions/*
+output/summaries/*
+output/meeting_schedule.csv
+!output/backups/.gitkeep
+!output/descriptions/.gitkeep
+!output/summaries/.gitkeep
+
+# OS specific
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
-
-# Project specific
-*.csv
-*.pickle
-daily_summaries/
-descriptions/
-backups/
-
-# Credentials
-credentials.json 
+Thumbs.db 
