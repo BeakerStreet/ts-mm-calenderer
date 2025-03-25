@@ -17,6 +17,44 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Timing parameters
+MEETING_DURATION = 15 
+FIRST_MTG_START = '09:30' # often after a briefing of some kind
+LAST_MTG_END = '13:40' # when does the last mtg end?
+LUNCH = False # are you doing lunch?
+LUNCH_START = '12:15' # lunch start time (if lunch)
+LUNCH_END = '12:15' # lunch end time (if lunch)
+
+# Meeting slots configuration
+MEETING_SLOTS = {
+    'morning': {
+        'start_time': FIRST_MTG_START,
+        'end_time': LUNCH_START if LUNCH else LAST_MTG_END,
+        'break_duration': 10,  # minutes between meetings
+    },
+    'afternoon': {
+        'start_time': LUNCH_END if LUNCH else LAST_MTG_END,
+        'end_time': LAST_MTG_END,
+        'break_duration': 5,  # minutes between meetings
+    }
+}
+
+def load_companies():
+    """Load companies data from CSV file"""
+    companies_file = os.path.join('config', 'companies.csv')
+    df = pd.read_csv(companies_file)
+    
+    # Convert DataFrame to dictionary format
+    companies = {}
+    for _, row in df.iterrows():
+        companies[row['company_name']] = {
+            'emails': row['founder_emails']
+        }
+    return companies
+
+# Load companies from CSV
+COMPANIES = load_companies()
+
 # Airtable setup
 AIRTABLE_TOKEN = os.getenv('AIRTABLE_TOKEN')
 AIRTABLE_BASE_ID = os.getenv('AIRTABLE_BASE_ID')
@@ -31,6 +69,14 @@ AIRTABLE_API_URL = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TA
 AIRTABLE_HEADERS = {
     'Authorization': f'Bearer {AIRTABLE_TOKEN}',
     'Content-Type': 'application/json'
+}
+
+# Output paths
+OUTPUT_PATHS = {
+    'descriptions': 'output/descriptions',
+    'summaries': 'output/summaries',
+    'backups': 'output/backups',
+    'schedule': 'output/meeting_schedule.csv'
 }
 
 def get_target_date():
@@ -59,43 +105,31 @@ def get_airtable_records():
 
 def generate_time_slots(date_str, num_slots):
     """
-    Generate time slots for meetings with specific timing pattern:
-    - Morning slots: 9:30-9:55, 10:00-10:25, 10:30-10:55, 11:00-11:25, 11:30-11:55
-    - Afternoon slots: 12:15-12:40, 12:45-13:10, 13:15-13:40
+    Generate time slots for meetings based on configuration
     """
     slots = []
     date = datetime.strptime(date_str, '%Y-%m-%d')
     
-    # Morning slots (9:30 - 11:55)
-    current_time = datetime.strptime(f"{date_str} 09:30", '%Y-%m-%d %H:%M')
-    for i in range(5):  # First 5 slots
-        start_time = current_time
-        end_time = start_time + timedelta(minutes=25)
+    # Process each time period (morning/afternoon)
+    for period, config in MEETING_SLOTS.items():
+        current_time = datetime.strptime(f"{date_str} {config['start_time']}", '%Y-%m-%d %H:%M')
+        end_time = datetime.strptime(f"{date_str} {config['end_time']}", '%Y-%m-%d %H:%M')
         
-        slots.append({
-            'start': start_time.isoformat(),
-            'end': end_time.isoformat()
-        })
-        
-        # Add 5-minute break between slots
-        current_time = end_time + timedelta(minutes=5)
-    
-    # Afternoon slots (12:15 - 13:40)
-    current_time = datetime.strptime(f"{date_str} 12:15", '%Y-%m-%d %H:%M')
-    for i in range(3):  # Remaining 3 slots
-        start_time = current_time
-        end_time = start_time + timedelta(minutes=25)
-        
-        slots.append({
-            'start': start_time.isoformat(),
-            'end': end_time.isoformat()
-        })
-        
-        # Add 5-minute break between slots
-        current_time = end_time + timedelta(minutes=5)
+        while current_time < end_time:
+            start_time = current_time
+            end_time = start_time + timedelta(minutes=MEETING_DURATION)
+            
+            # Only add slot if it doesn't exceed the period end time
+            if end_time <= datetime.strptime(f"{date_str} {config['end_time']}", '%Y-%m-%d %H:%M'):
+                slots.append({
+                    'start': start_time.isoformat(),
+                    'end': end_time.isoformat()
+                })
+            
+            # Add break between meetings
+            current_time = end_time + timedelta(minutes=config['break_duration'])
     
     logger.info(f"Generated {len(slots)} meeting slots for {date_str}")
-    
     return slots
 
 def convert_name_to_url_format(name):
@@ -235,31 +269,6 @@ def main():
         target_date = get_target_date()
         logger.info(f"Filtering mentors for date: {target_date}")
         
-        # Define companies with their founder emails
-        companies = {
-            'Alethica': {
-                'emails': 'faisal.ghaffar@alethica.com, aurelia.lefrapper@alethica.com'
-            },
-            'Ovida': {
-                'emails': 'alex@ovida.io'
-            },
-            'Renn': {
-                'emails': 'matan@getrenn.com, nleinov@gmail.com'
-            },
-            'PrettyData': {
-                'emails': 'bww@prettydata.co'
-            },
-            'Tova': {
-                'emails': 'alexa@tova.earth'
-            },
-            'Solim Health': {
-                'emails': 'basnetabhaya@gmail.com, tonyelvis-steven@hotmail.com'
-            },
-            'Parasol': {
-                'emails': 'Kasparharsaae@parasolplatforms.com, momirzan@parasolplatforms.com'
-            }
-        }
-        
         # Get all records
         records = get_airtable_records()
         logger.info(f"Found {len(records)} records in Airtable")
@@ -269,11 +278,11 @@ def main():
             logger.info(f"Available fields in first record: {list(records[0]['fields'].keys())}")
         
         # Create schedule with target date
-        schedule = create_schedule(records, companies, target_date)
+        schedule = create_schedule(records, COMPANIES, target_date)
         
         # Convert to DataFrame and save to CSV
         df = pd.DataFrame(schedule)
-        output_file = 'meeting_schedule.csv'
+        output_file = OUTPUT_PATHS['schedule']
         
         # Check if file exists and remove it first to ensure clean write
         if os.path.exists(output_file):
@@ -285,7 +294,7 @@ def main():
         logger.info(f"Schedule has been exported to {output_file}")
         
         # Create backups directory if it doesn't exist
-        backup_dir = 'backups'
+        backup_dir = OUTPUT_PATHS['backups']
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
             logger.info(f"Created backup directory: {backup_dir}")
