@@ -9,9 +9,10 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
 logger = logging.getLogger(__name__)
 
-def read_meeting_schedule(csv_path='meeting_schedule.csv'):
+def read_meeting_schedule(csv_path='output/meeting_schedule.csv'):
     """Read meeting schedule from CSV file"""
     logger.info(f"Reading meeting schedule from {csv_path}")
     return pd.read_csv(csv_path)
@@ -23,7 +24,7 @@ def format_time(time_str):
 def generate_daily_summaries(date_str=None):
     """Generate daily summaries for the meeting schedule."""
     logger.info("Reading meeting schedule from meeting_schedule.csv")
-    df = pd.read_csv('meeting_schedule.csv')
+    df = pd.read_csv('output/meeting_schedule.csv')
     
     if date_str and date_str != 'all dates':
         df = df[df['date'] == date_str]
@@ -33,6 +34,10 @@ def generate_daily_summaries(date_str=None):
     
     # Get unique dates
     dates = df['date'].unique()
+    
+    # Create the output directory if it doesn't exist
+    output_dir = 'output/daily_summaries'
+    os.makedirs(output_dir, exist_ok=True)
     
     for date in dates:
         logger.info(f"Generating daily summary for date: {date}")
@@ -47,7 +52,7 @@ def generate_daily_summaries(date_str=None):
         time_slots = time_slots.reindex(columns=['mentor'] + sorted(time_slots.columns[1:]))
         
         # Save to CSV
-        output_file = f'daily_summaries/meeting_summary_{date}.csv'
+        output_file = os.path.join(output_dir, f'meeting_summary_{date}.csv')
         time_slots.to_csv(output_file, index=False)
         logger.info(f"Created daily summary for {date} at {output_file}")
     
