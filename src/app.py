@@ -250,18 +250,39 @@ def create_schedule(mentors, mentor_details, companies, target_date, time_slots)
     num_companies = len(company_list)
     num_mentors = len(mentors)
     
+    logger.info(f"Initial counts: {num_mentors} mentors, {num_companies} companies")
+    
     # Balance the lists by adding BREAK placeholders to the shorter list
     if num_mentors < num_companies:
-        logger.info(f"Adding {num_companies - num_mentors} BREAK placeholders to mentors list")
-        mentors.extend(["BREAK"] * (num_companies - num_mentors))
+        breaks_needed = num_companies - num_mentors
+        logger.info(f"Adding {breaks_needed} BREAK placeholders to mentors list")
+        
+        # Add BREAK placeholders to mentors to match the number of companies
+        mentors = mentors.copy()  # Create a copy to avoid modifying the original list
+        mentors.extend(["BREAK"] * breaks_needed)
+        
+        logger.info(f"Balanced: {len(mentors)} total slots (mentors + breaks), {num_companies} companies")
     elif num_companies < num_mentors:
-        logger.info(f"Adding {num_mentors - num_companies} BREAK placeholders to companies list")
-        company_list.extend(["BREAK"] * (num_mentors - num_companies))
+        breaks_needed = num_mentors - num_companies
+        logger.info(f"Adding {breaks_needed} BREAK placeholders to companies list")
+        
+        # Add BREAK placeholders to companies to match the number of mentors
+        company_list = company_list.copy()  # Create a copy to avoid modifying the original list
+        company_list.extend(["BREAK"] * breaks_needed)
+        
+        logger.info(f"Balanced: {num_mentors} mentors, {len(company_list)} total slots (companies + breaks)")
+    else:
+        logger.info(f"Already balanced: {num_mentors} mentors, {num_companies} companies")
     
     # Update counts after balancing
     num_companies = len(company_list)
     num_mentors = len(mentors)
-    logger.info(f"Balanced counts: {num_mentors} total slots (mentors + breaks), {num_companies} total slots (companies + breaks)")
+    
+    # Verify the lists are balanced
+    if num_mentors != num_companies:
+        logger.warning(f"Lists not properly balanced! Mentors: {num_mentors}, Companies: {num_companies}")
+    else:
+        logger.info(f"Successfully balanced both lists to {num_mentors} slots each")
     
     # Convert time slots to include date
     date_time_slots = []
