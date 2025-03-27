@@ -25,7 +25,7 @@ def generate_mentor_descriptions(schedule_df, target_date=None, create_master=Fa
     logger.info(f"Generating mentor descriptions for date: {target_date if target_date else 'all dates'}")
     
     # Create the output directory if it doesn't exist
-    output_dir = 'output/descriptions'
+    output_dir = 'output/descriptions/mentors'
     os.makedirs(output_dir, exist_ok=True)
     
     # Filter the schedule for the target date if specified
